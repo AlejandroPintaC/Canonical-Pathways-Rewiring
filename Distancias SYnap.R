@@ -79,7 +79,7 @@ dist_matrix_AD_clean_Synap <- dist_matrix_AD_clean_Synap[
   order(colnames(dist_matrix_AD_clean_Synap))
 # Heatmap AD
 pheatmap(dist_matrix_AD_clean_Synap,
-         color = my_colors,
+         color = Heatmap_colors,
          show_rownames = TRUE,
          show_colnames = TRUE,
          clustering_method = "complete",
@@ -98,7 +98,7 @@ dist_matrix_ctrl_clean_Synap <- dist_matrix_ctrl_clean_Synap[
 ]
 # Heatmap control
 pheatmap(dist_matrix_ctrl_clean_Synap,
-         color = my_colors,
+         color = Heatmap_colors,
          show_rownames = TRUE,
          show_colnames = TRUE,
          clustering_method = "complete",
@@ -132,7 +132,7 @@ png(file.path(ruta_Synap, "heatmap_AD_Synap.png"),
     width = 2000, height = 2000, res = 250)
 
 pheatmap(dist_matrix_AD_clean_Synap,
-         color = my_colors,
+         color = Heatmap_colors,
          show_rownames = TRUE,
          show_colnames = TRUE,
          clustering_method = "complete",
@@ -147,7 +147,7 @@ png(file.path(ruta_Synap, "heatmap_Control_Synap.png"),
     width = 2000, height = 2000, res = 250)
 
 pheatmap(dist_matrix_ctrl_clean_Synap,
-         color = my_colors,
+         color = Heatmap_colors,
          show_rownames = TRUE,
          show_colnames = TRUE,
          clustering_method = "complete",
@@ -196,8 +196,97 @@ write.csv(
 
 # definir colores
 # Paleta de colores continua 
-my_colors <- colorRampPalette(c("#f7fbff", "#6baed6", "#08306b"))(100)
+Heatmap_colors <- colorRampPalette(c("#f7fbff", "#6baed6", "#08306b"))(100)
 
 
+#Establecer funciones similares
+rewire_graph_Synap <- function(g, niter = NULL) {
+  if (is.null(niter)) niter <- ecount(g) * 10
+  rewire(g, with = keeping_degseq(niter = niter))
+}
 
+mean_dist_subgraph_Synap <- function(full_graph, gene_set) {
+  genes_in_graph <- intersect(V(full_graph)$name, gene_set)
+  if (length(genes_in_graph) < 2) return(NA)
+  sub_g <- induced_subgraph(full_graph, vids = genes_in_graph)
+  if (ecount(sub_g) == 0) return(NA)
+  dm <- distances(sub_g)
+  valores_validos <- dm[is.finite(dm) & dm > 0]
+  if (length(valores_validos) == 0) return(NA)
+  mean(valores_validos)
+}
+
+#Nuestros valores observados 
+dm_AD_Synap   <- distances(grafo_AD_sub_Synap)
+dm_ctrl_Synap <- distances(grafo_ctrl_sub_Synap)
+
+obs_AD_Synap   <- mean(dm_AD_Synap[is.finite(dm_AD_Synap)     & dm_AD_Synap   > 0])
+obs_ctrl_Synap <- mean(dm_ctrl_Synap[is.finite(dm_ctrl_Synap) & dm_ctrl_Synap > 0])
+
+#Definir nuestros parametros
+n_perm     <- 1000
+alpha      <- 0.05
+gene_set_Synap <- Synap_pathways_AD
+set.seed(42)
+
+#Label permutation
+
+all_genes_AD   <- V(grafo_AD)$name
+all_genes_ctrl <- V(grafo_ctrl)$name
+
+n_AD_Synap   <- length(Genes_in_AD_Synap)
+n_ctrl_Synap <- length(Genes_in_ctr_Synap)
+
+null_AD_Synap      <- numeric(n_perm)
+null_control_Synap <- numeric(n_perm)
+
+for (i in seq_len(n_perm)) {
+  if (i %% 100 == 0) cat(sprintf("Permutación %d / %d\n", i, n_perm))
+  genes_rand         <- sample(all_genes_AD, n_AD_Synap)
+  null_AD_Synap[i]   <- mean_dist_subgraph_Synap(grafo_AD, genes_rand)
+}
+
+for (i in seq_len(n_perm)) {
+  if (i %% 100 == 0) cat(sprintf("Permutación %d / %d\n", i, n_perm))
+  genes_rand              <- sample(all_genes_ctrl, n_ctrl_Synap)
+  null_control_Synap[i]   <- mean_dist_subgraph_Synap(grafo_ctrl, genes_rand)
+}
+
+#p-VALUE, Z-SCORE
+pval_AD_Synap   <- mean(null_AD_Synap      >= obs_AD_Synap,   na.rm = TRUE)
+pval_ctrl_Synap <- mean(null_control_Synap >= obs_ctrl_Synap, na.rm = TRUE)
+
+pval_AD_Synap_2t   <- 2 * min(pval_AD_Synap,   1 - pval_AD_Synap)
+pval_ctrl_Synap_2t <- 2 * min(pval_ctrl_Synap, 1 - pval_ctrl_Synap)
+
+ci_AD_Synap   <- quantile(null_AD_Synap,      probs = c(0.025, 0.975), na.rm = TRUE)
+ci_ctrl_Synap <- quantile(null_control_Synap, probs = c(0.025, 0.975), na.rm = TRUE)
+
+z_AD_Synap   <- (obs_AD_Synap   - mean(null_AD_Synap,      na.rm = TRUE)) / sd(null_AD_Synap,      na.rm = TRUE)
+z_ctrl_Synap <- (obs_ctrl_Synap - mean(null_control_Synap, na.rm = TRUE)) / sd(null_control_Synap, na.rm = TRUE)
+
+summary_permutation_Synap <- data.frame(
+  Group              = c("AD", "Control"),
+  Observed_mean_dist = c(obs_AD_Synap,        obs_ctrl_Synap),
+  Null_mean          = c(mean(null_AD_Synap,      na.rm = TRUE), mean(null_control_Synap, na.rm = TRUE)),
+  Null_SD            = c(sd(null_AD_Synap,        na.rm = TRUE), sd(null_control_Synap,   na.rm = TRUE)),
+  CI_lower_95        = c(ci_AD_Synap[1],   ci_ctrl_Synap[1]),
+  CI_upper_95        = c(ci_AD_Synap[2],   ci_ctrl_Synap[2]),
+  Z_score            = c(z_AD_Synap,       z_ctrl_Synap),
+  P_value_2tailed    = c(pval_AD_Synap_2t, pval_ctrl_Synap_2t),
+  N_permutations     = n_perm
+)
+
+print(summary_permutation_Synap)
+
+write.csv(
+  summary_permutation_Synap,
+  file = file.path(ruta_Synap, "permutation_test_Synap.csv"),
+  row.names = FALSE
+)
+
+
+# Ver si ya tienes algún objeto con la conversión
+head(V(grafo_AD)$name)        # ¿son ENSEMBL IDs?
+head(V(grafo_AD)$name_trad)   # ¿aquí están los gene symbols?
 
